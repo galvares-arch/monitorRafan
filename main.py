@@ -408,16 +408,20 @@ def gerar_monitor_rafan(d, out_path):
 # ==========================================================================
 app = Flask(__name__)
 
-# Entrega (WhatsApp) - a definir; hoje deixa plugavel via variaveis de ambiente.
-WA_PROVIDER = os.environ.get("WA_PROVIDER", "")   # "zapi" | "cloud" | ""(off)
+# Entrega via Telegram (MVP). WhatsApp entra depois trocando esta funcao.
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
 
 
-def _entregar(pdf_path):
-    """Envio do PDF ao WhatsApp. Implementado apos escolha do provedor."""
-    if not WA_PROVIDER:
-        return {"delivery": "skipped (WA_PROVIDER nao configurado)"}
-    # placeholders — preenchidos quando definirmos Z-API/Cloud API
-    return {"delivery": f"provider={WA_PROVIDER} (nao implementado ainda)"}
+def _entregar_telegram(pdf_path):
+    """Posta o PDF no grupo do Telegram. Requer BOT_TOKEN e CHAT_ID nas env vars."""
+    with open(pdf_path, "rb") as fh:
+        r = requests.post(
+            "https://api.telegram.org/bot" + BOT_TOKEN + "/sendDocument",
+            data={"chat_id": CHAT_ID, "caption": os.path.basename(pdf_path)},
+            files={"document": (os.path.basename(pdf_path), fh, "application/pdf")},
+            timeout=60)
+    return r.status_code, r.text[:300]
 
 
 @app.route("/", methods=["GET"])
@@ -438,9 +442,11 @@ def render():
         hoje = datetime.date.today().isoformat()
         out = "/tmp/Monitor RAFAN - " + hoje + ".pdf"
         gerar_monitor_rafan(data, out)
-        if WA_PROVIDER:
-            deliv = _entregar(out)
-            return jsonify({"ok": True, **deliv, "arquivo": os.path.basename(out)})
+        if BOT_TOKEN and CHAT_ID:
+            status, resp = _entregar_telegram(out)
+            ok = status == 200
+            return jsonify({"ok": ok, "telegram_status": status,
+                            "telegram_resp": resp, "arquivo": os.path.basename(out)}), (200 if ok else 502)
         # sem canal de entrega: devolve o proprio PDF (testavel ja)
         return send_file(out, mimetype="application/pdf",
                          as_attachment=True, download_name=os.path.basename(out))
