@@ -80,6 +80,22 @@ S = _styles()
 
 _PLAIN = False   # modo de contingencia: escapa tudo se a montagem normal falhar
 
+# frases-meta que o modelo as vezes coloca no lugar de um comentario real
+_META_RE = re.compile(
+    r'sem data individual|agregado mais recente|n[aã]o rastre|n[aã]o indexad|'
+    r'conforme protocolo|campo retornado vazio|n[aã]o dispon|n[aã]o localiz',
+    re.I)
+
+
+def _linha_real(r):
+    """True se a linha tem um comentario real (nao vazio, nao frase-meta)."""
+    com = _txt(r.get("comentario"), "").strip()
+    if com in ("", "—"):
+        return False
+    if _META_RE.search(com):
+        return False
+    return True
+
 
 def _txt(x, default="—"):
     """Coage qualquer valor (num, None, etc.) para string segura para Paragraph."""
@@ -300,8 +316,7 @@ def _pagina_motel(story, m):
 
     # --- bloco Google ---
     story.append(Paragraph("Avaliações no Google — novas no dia anterior", S["subhead"]))
-    aval = [x for x in (m.get("avaliacoes") or [])
-            if isinstance(x, dict) and (x.get("comentario") or x.get("autor") or x.get("nota"))]
+    aval = [x for x in (m.get("avaliacoes") or []) if isinstance(x, dict) and _linha_real(x)]
     if aval:
         story.append(_tabela_avaliacoes(aval))
     else:
@@ -315,8 +330,7 @@ def _pagina_motel(story, m):
     handle = _clean(m.get("handle"), "")
     story.append(Paragraph(f"Comentários no Instagram {handle} — novos no dia anterior",
                            S["subhead"]))
-    insta = [x for x in (m.get("instagram") or [])
-             if isinstance(x, dict) and (x.get("comentario") or x.get("autor"))]
+    insta = [x for x in (m.get("instagram") or []) if isinstance(x, dict) and _linha_real(x)]
     if insta:
         story.append(_tabela_instagram(insta))
     else:
