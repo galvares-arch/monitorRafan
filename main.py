@@ -1,4 +1,5 @@
 import os, re, json, datetime, requests
+import xml.sax.saxutils as _sx
 from flask import Flask, request, jsonify, send_file
 
 # ==========================================================================
@@ -77,6 +78,28 @@ def _styles():
 
 S = _styles()
 
+_PLAIN = False   # modo de contingencia: escapa tudo se a montagem normal falhar
+
+
+def _txt(x, default="—"):
+    """Coage qualquer valor (num, None, etc.) para string segura para Paragraph."""
+    if x is None:
+        return default
+    s = str(x)
+    return s if s != "" else default
+
+
+def _clean(x, default="—"):
+    """_txt + escapa & solto (comentarios reais quebram o Paragraph sem isso).
+    Preserva tags intencionais (<b>, <br/>, <a>, <u>, <font>).
+    Em modo _PLAIN (contingencia), escapa tudo (&, <, >)."""
+    s = _txt(x, default)
+    if _PLAIN:
+        return _sx.escape(s)
+    # & que nao inicia uma entidade valida -> &amp;
+    s = re.sub(r'&(?!(#\d+|#x[0-9a-fA-F]+|amp|lt|gt|quot|apos);)', '&amp;', s)
+    return s
+
 
 def _link(texto, url):
     if url:
@@ -135,11 +158,21 @@ def _doc(path, header_right_top, header_right_sub, footer_left):
 
 # ---------- componentes ----------
 def _faixa_kpis(kpis):
-    """Faixa horizontal de KPIs: valor em cima, rotulo embaixo, centralizado."""
-    n = len(kpis)
+    """Faixa horizontal de KPIs: valor em cima, rotulo embaixo. Tolerante a formato."""
+    norm = []
+    for item in (kpis or []):
+        if isinstance(item, (list, tuple)):
+            val = item[0] if len(item) >= 1 else ""
+            lbl = item[1] if len(item) >= 2 else ""
+        else:
+            val, lbl = item, ""
+        norm.append((_txt(val), _clean(lbl, "")))
+    if not norm:
+        norm = [("—", "")]
+    n = len(norm)
     col_w = (PAGE_W - 2*MARGIN) / n
-    row_val = [Paragraph(val, S["kpi_big"]) for val, _ in kpis]
-    row_lbl = [Paragraph(lbl, S["kpi_lbl"]) for _, lbl in kpis]
+    row_val = [Paragraph(v, S["kpi_big"]) for v, _ in norm]
+    row_lbl = [Paragraph(l, S["kpi_lbl"]) for _, l in norm]
     t = Table([row_val, row_lbl], colWidths=[col_w]*n)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F4F1EA")),
@@ -171,21 +204,21 @@ def _tabela_avaliacoes(rows):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
     ]
-    for i, r in enumerate(rows, start=1):
-        autor = r.get("autor", "—")
+    for i, r in enumerate([x for x in (rows or []) if isinstance(x, dict)], start=1):
+        autor = _clean(r.get("autor"), "—")
         nota = r.get("nota", "—")
-        if str(nota).isdigit():
+        if str(nota).isdigit() and 0 <= int(nota) <= 5:
             n = int(nota)
             estrelas = (f'<font color="#C6A15B">{"★" * n}</font>'
                         f'<font color="#D8D2C4">{"★" * (5 - n)}</font>')
         else:
-            estrelas = str(nota)
-        cls = r.get("classificacao", "—").upper()
+            estrelas = _txt(nota)
+        cls = _txt(r.get("classificacao"), "—").upper()
         data.append([
             Paragraph(autor, S["cell"]),
             Paragraph(estrelas, S["cell"]),
-            Paragraph(r.get("data", "—"), S["cell"]),
-            Paragraph(r.get("comentario", ""), S["cell"]),
+            Paragraph(_clean(r.get("data"), "—"), S["cell"]),
+            Paragraph(_clean(r.get("comentario"), ""), S["cell"]),
             Paragraph(cls, S["sent"]),
         ])
         style.append(("BACKGROUND", (4, i), (4, i), SENT_COLORS.get(cls, GREY)))
@@ -211,13 +244,13 @@ def _tabela_instagram(rows):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
     ]
-    for i, r in enumerate(rows, start=1):
-        cls = r.get("classificacao", "—").upper()
+    for i, r in enumerate([x for x in (rows or []) if isinstance(x, dict)], start=1):
+        cls = _txt(r.get("classificacao"), "—").upper()
         post = _link("abrir", r.get("post_url")) if r.get("post_url") else "—"
         data.append([
-            Paragraph(r.get("autor", "—"), S["cell"]),
-            Paragraph(r.get("data", "—"), S["cell"]),
-            Paragraph(r.get("comentario", ""), S["cell"]),
+            Paragraph(_clean(r.get("autor"), "—"), S["cell"]),
+            Paragraph(_clean(r.get("data"), "—"), S["cell"]),
+            Paragraph(_clean(r.get("comentario"), ""), S["cell"]),
             Paragraph(post, S["cell"]),
             Paragraph(cls, S["sent"]),
         ])
@@ -243,12 +276,12 @@ def _tabela_imprensa(rows):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
     ]
-    for i, it in enumerate(rows, start=1):
-        rel = it.get("relevancia", "—").upper()
+    for i, it in enumerate([x for x in (rows or []) if isinstance(x, dict)], start=1):
+        rel = _txt(it.get("relevancia"), "—").upper()
         data.append([
-            Paragraph(_link(it.get("titulo", ""), it.get("url")), S["cell"]),
-            Paragraph(it.get("fonte", "—"), S["cell"]),
-            Paragraph(it.get("resumo", ""), S["cell"]),
+            Paragraph(_link(_clean(it.get("titulo"), "—"), it.get("url")), S["cell"]),
+            Paragraph(_clean(it.get("fonte"), "—"), S["cell"]),
+            Paragraph(_clean(it.get("resumo"), ""), S["cell"]),
             Paragraph(rel, S["sent"]),
         ])
         style.append(("BACKGROUND", (3, i), (3, i), REL_COLORS.get(rel, GREY)))
@@ -259,53 +292,69 @@ def _tabela_imprensa(rows):
 
 def _pagina_motel(story, m):
     """Uma pagina por motel: KPIs + avaliacoes Google + comentarios Instagram."""
-    story.append(Paragraph(m["nome"], S["block"]))
-    story.append(Paragraph(m["subtitle"], S["sub"]))
-    story.append(_faixa_kpis(m["kpis"]))
+    m = m if isinstance(m, dict) else {}
+    story.append(Paragraph(_clean(m.get("nome"), "Motel"), S["block"]))
+    story.append(Paragraph(_clean(m.get("subtitle"), ""), S["sub"]))
+    story.append(_faixa_kpis(m.get("kpis")))
     story.append(Spacer(1, 6))
 
     # --- bloco Google ---
     story.append(Paragraph("Avaliações no Google — novas no dia anterior", S["subhead"]))
-    if m.get("avaliacoes"):
-        story.append(_tabela_avaliacoes(m["avaliacoes"]))
+    aval = [x for x in (m.get("avaliacoes") or [])
+            if isinstance(x, dict) and (x.get("comentario") or x.get("autor") or x.get("nota"))]
+    if aval:
+        story.append(_tabela_avaliacoes(aval))
     else:
         story.append(Paragraph(
             "<b>Nenhuma nova avaliação encontrada no período.</b> "
             "Ausência de registro é reportada como tal — nada é inventado.", S["leitura"]))
-    story.append(Paragraph("<b>Leitura (Google):</b> " + m.get("leitura", ""), S["leitura"]))
+    story.append(Paragraph("<b>Leitura (Google):</b> " + _clean(m.get("leitura"), ""), S["leitura"]))
     story.append(Spacer(1, 6))
 
     # --- bloco Instagram ---
-    handle = m.get("handle", "")
+    handle = _clean(m.get("handle"), "")
     story.append(Paragraph(f"Comentários no Instagram {handle} — novos no dia anterior",
                            S["subhead"]))
-    if m.get("instagram"):
-        story.append(_tabela_instagram(m["instagram"]))
+    insta = [x for x in (m.get("instagram") or [])
+             if isinstance(x, dict) and (x.get("comentario") or x.get("autor"))]
+    if insta:
+        story.append(_tabela_instagram(insta))
     else:
         story.append(Paragraph(
             "<b>Nenhum comentário novo encontrado no período.</b> "
             "Ausência de registro é reportada como tal — nada é inventado.", S["leitura"]))
-    story.append(Paragraph("<b>Leitura (Instagram):</b> " + m.get("leitura_instagram", ""),
+    story.append(Paragraph("<b>Leitura (Instagram):</b> " + _clean(m.get("leitura_instagram"), ""),
                            S["leitura"]))
 
 
-def gerar_monitor_rafan(d, out_path):
+def _build_pdf(d, out_path):
     doc = _doc(out_path, "Monitor de Inteligência", "Reputação e Imprensa",
                "RAFAN Empreendimentos  •  Documento interno / confidencial")
     story = []
 
     # ---- Pagina 1: capa / resumo executivo ----
     story.append(Paragraph("Monitor de Inteligência — Reputação e Imprensa", S["title"]))
-    story.append(Paragraph(d["intro"], S["intro"]))
+    story.append(Paragraph(_clean(d.get("intro"), ""), S["intro"]))
     story.append(Spacer(1, 8))
     story.append(Paragraph("Resumo executivo", S["block"]))
-    story.append(_faixa_kpis(d["resumo"]["kpis"]))
+    resumo = d.get("resumo") if isinstance(d.get("resumo"), dict) else {}
+    story.append(_faixa_kpis(resumo.get("kpis")))
     story.append(Spacer(1, 8))
     pts = []
-    for lead, txt in d["resumo"]["destaques"]:
-        pts.append(Paragraph(f"<b>{lead}</b> {txt}",
+    for item in (resumo.get("destaques") or []):
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            lead, txt = item[0], item[1]
+        elif isinstance(item, (list, tuple)) and len(item) == 1:
+            lead, txt = item[0], ""
+        else:
+            lead, txt = "", item
+        pts.append(Paragraph(f"<b>{_clean(lead, '')}</b> {_clean(txt, '')}",
                    ParagraphStyle("pt", fontName="Helvetica", fontSize=8.2,
                                   leading=11.5, spaceAfter=4,
+                                  textColor=colors.HexColor("#222222"))))
+    if not pts:
+        pts.append(Paragraph("Sem destaques consolidados para o período.",
+                   ParagraphStyle("pt0", fontName="Helvetica", fontSize=8.2, leading=11.5,
                                   textColor=colors.HexColor("#222222"))))
     box = Table([[pts]], colWidths=[PAGE_W - 2*MARGIN])
     box.setStyle(TableStyle([
@@ -317,23 +366,41 @@ def gerar_monitor_rafan(d, out_path):
     story.append(box)
 
     # ---- Uma pagina por motel ----
-    for m in d["moteis"]:
+    for m in (d.get("moteis") or []):
         story.append(PageBreak())
         _pagina_motel(story, m)
 
     # ---- Ultima pagina: imprensa ----
+    imprensa = d.get("imprensa") if isinstance(d.get("imprensa"), dict) else {}
     story.append(PageBreak())
     story.append(Paragraph("Imprensa e portais de notícias", S["block"]))
-    story.append(Paragraph(d["imprensa"]["subtitle"], S["sub"]))
-    if d["imprensa"].get("rows"):
-        story.append(_tabela_imprensa(d["imprensa"]["rows"]))
+    story.append(Paragraph(_clean(imprensa.get("subtitle"), ""), S["sub"]))
+    imp_rows = [x for x in (imprensa.get("rows") or []) if isinstance(x, dict)]
+    if imp_rows:
+        story.append(_tabela_imprensa(imp_rows))
     else:
         story.append(Paragraph(
             "<b>Nenhuma menção encontrada</b> nos portais monitorados no período.", S["leitura"]))
-    story.append(Paragraph("<b>Leitura do bloco:</b> " + d["imprensa"].get("leitura", ""),
+    story.append(Paragraph("<b>Leitura do bloco:</b> " + _clean(imprensa.get("leitura"), ""),
                            S["leitura"]))
 
     doc.build(story)
+
+
+def gerar_monitor_rafan(d, out_path):
+    """Gera o PDF. Se algo no conteudo quebrar a montagem, tenta de novo em
+    modo texto puro (escapando tudo) para nunca retornar 500 por variacao de dado."""
+    global _PLAIN
+    d = d if isinstance(d, dict) else {}
+    _PLAIN = False
+    try:
+        _build_pdf(d, out_path)
+    except Exception:
+        _PLAIN = True
+        try:
+            _build_pdf(d, out_path)
+        finally:
+            _PLAIN = False
 
 
 # ==========================================================================
